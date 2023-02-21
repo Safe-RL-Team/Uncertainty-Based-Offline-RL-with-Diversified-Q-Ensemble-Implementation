@@ -129,6 +129,9 @@ def train(config: TrainConfig) -> None:
     critic = VectorCritic([state_dim + action_dim, 256, 256, 1], num_critics=config.num_critics).to(config.device)
     critic_optimizer = torch.optim.Adam(critic.parameters(), lr=config.lr_critic)
     with torch.no_grad: target_critic = deepcopy(critic)
+    # TODO: maybe also train config.beta, as in the CORL implementation (there its called alpha),
+    #       but the paper pseudocode doesn't do that.
+    #       the official implementaiton does that only if `use_automatic_entropy_tuning` is enabled
 
     # main training loop
     for update_step in trange(config.total_updates):
@@ -143,18 +146,19 @@ def train(config: TrainConfig) -> None:
             q_target = reward + (1 - done) * config.gamma * q_next
 
         # update critcs
-        # [num_critics] <- ([num_critics, batch_size] - [1, batch_size])
-        critic_losses = (critic(state, action) - q_target[None,:]).pow(2).mean(dim=1)
+        # [1] <- ([num_critics, batch_size] - [1, batch_size])
+        critic_losses = (critic(state, action) - q_target[None,:]).pow(2).mean(dim=1).sum(dim=0)
         # [1]
-        diversity_loss = ...
-        critic_loss = critic_losses.sum(0) + config.eta * diversity_loss  # TODO
+        diversity_loss = (...).mean() / (config.num_critics - 1)  # TODO
+        critic_loss = critic_losses + config.eta * diversity_loss
         critic_optimizer.zero_grad()
         critic_loss.backward()
         critic_optimizer.step()
 
         # update actor
-        action, action_log_prob = actor(state)
-        actor_loss = ...  # TODO
+        actor_action, actor_action_log_prob = actor(state)
+        actor_q_values = critic(state, actor_action)
+        actor_loss = (actor_q_values.min().values - config.beta * actor_action_log_prob).mean()
         actor_optimizer.zero_grad()
         actor_loss.backward()
         actor_optimizer.step()
@@ -186,6 +190,8 @@ def train(config: TrainConfig) -> None:
                 "actor_loss": actor_loss.item(),
                 "eval/mean_reward": np.mean(rewards),
                 "eval/std_reward": np.std(rewards),
+                "actor/entropy": -actor_action_log_prob.mean().item(),
+                "actor/q_value": actor_q_values.mean().item(),
             })
 
     wandb_run.finish()

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import pyrallis
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from torch.distributions import Normal
 import numpy as np
 import wandb
 from tqdm import trange
@@ -66,17 +66,29 @@ class ReplayBuffer:
 class Actor(nn.Module):
     def __init__(self, layer_sizes : list[int], max_action : float = 1.0):
         super().__init__()
+        assert len(layer_sizes) >= 3, f'layer_sizes must have at least 3 elements (input, hidden, output), got {layer_sizes}'
         self.max_action = max_action
-        self.model = nn.Sequential(*(
-            x for i in range(len(layer_sizes) - 1) for x in [
+        # setup hidden layers based on the given layer sizes
+        self.hidden = nn.Sequential(*(
+            x for i in range(len(layer_sizes) - 2) for x in [
                 nn.Linear(layer_sizes[i], layer_sizes[i + 1]),
                 nn.ReLU()
             ]
         ))
+        # create output and output uncertainty layers
+        self.output = nn.Linear(layer_sizes[-2], layer_sizes[-1])
+        self.output_uncertainty = nn.Linear(layer_sizes[-2], layer_sizes[-1])
 
     def forward(self, state : torch.Tensor):
-        # TODO: return log_prob
-        return self.max_action * torch.tanh(self.model(state))
+        x_hidden = self.hidden(state)
+        x_mean = self.output(x_hidden)
+        x_std = torch.exp(torch.clip(self.output_uncertainty(x_hidden), -5, 2))
+        policy_dist = Normal(x_mean, x_std)
+        action_linear = policy_dist.rsample()
+        action = torch.tanh(action_linear) * self.max_action
+        action_log_prob = policy_dist.log_prob(action_linear).sum(-1)
+        # TODO: maybe subtract `torch.log(1 - tanh_action.pow(2) + 1e-6).sum(axis=-1)` from action_log_prob, as in CORL
+        return action, action_log_prob
 
 
 class VectorCritic(nn.Module):
@@ -148,8 +160,13 @@ def train(config: TrainConfig) -> None:
         # update critcs
         # [1] <- ([num_critics, batch_size] - [1, batch_size])
         critic_losses = (critic(state, action) - q_target[None,:]).pow(2).mean(dim=1).sum(dim=0)
+        # [batch_size, num_critics, action_dim]
+        q_gradients = torch.autograd.grad(critic(state, action.requires_grad()), create_graph=True).t()
+        q_gradients = q_gradients / q_gradients.norm(p=2,dim=2)
+        # [batch_size, num_critics, num_critics]
+        q_cosine_similarity_matrix = (q_gradients @ q_gradients.transpose(1,2)) * (1 - torch.eye(config.num_critics, device=config.device))
         # [1]
-        diversity_loss = (...).mean() / (config.num_critics - 1)  # TODO
+        diversity_loss = (q_cosine_similarity_matrix.sum(dim=(1,2))).mean() / (config.num_critics - 1)
         critic_loss = critic_losses + config.eta * diversity_loss
         critic_optimizer.zero_grad()
         critic_loss.backward()

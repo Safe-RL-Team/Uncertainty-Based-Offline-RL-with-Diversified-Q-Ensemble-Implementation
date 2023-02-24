@@ -26,6 +26,7 @@ class TrainConfig:
     env: str = 'halfcheetah-medium-v2'  # environment name
 
     num_critics: int = 5  # number of critics
+    beta = 0.1  # factor for action log probability for the actor loss
     eta: float = 0.1  # eta for diversity loss
     gamma: float = 0.99  # discount factor
     tau: float = 0.005  # tau for target network update
@@ -53,7 +54,7 @@ class ReplayBuffer:
         )
 
     def sample(self):
-        idx = np.random.randint(0, len(self.states))
+        idx = np.random.randint(0, len(self.states), size=self.batch_size)
         return (
             self.states[idx],
             self.actions[idx],
@@ -94,16 +95,14 @@ class Actor(nn.Module):
 class VectorCritic(nn.Module):
     def __init__(self, layer_sizes: list[int], num_critics: int):
         super().__init__()
-        self.models = []
-        for _ in range(num_critics):
-            self.models.append(
-                nn.Sequential(*(
-                    x for i in range(len(layer_sizes) - 1) for x in [
-                        nn.Linear(layer_sizes[i], layer_sizes[i + 1]),
-                        nn.ReLU()
-                    ]
-                ))
-            )
+        self.models = nn.ModuleList([
+            nn.Sequential(*(
+                x for i in range(len(layer_sizes) - 1) for x in [
+                    nn.Linear(layer_sizes[i], layer_sizes[i + 1]),
+                    nn.ReLU()
+                ]
+            )) for _ in range(num_critics)
+        ])
     
     def forward(self, state: torch.Tensor, action: torch.Tensor):
         return torch.cat([model(torch.cat([state, action], dim=-1)) for model in self.models], dim=-1)
@@ -140,7 +139,7 @@ def train(config: TrainConfig) -> None:
     actor_optimizer = torch.optim.Adam(actor.parameters(), lr=config.lr_actor)
     critic = VectorCritic([state_dim + action_dim, 256, 256, 1], num_critics=config.num_critics).to(config.device)
     critic_optimizer = torch.optim.Adam(critic.parameters(), lr=config.lr_critic)
-    with torch.no_grad: target_critic = deepcopy(critic)
+    with torch.no_grad(): target_critic = deepcopy(critic)  # make training more stable by using a soft updated target critic
     # TODO: maybe also train config.beta, as in the CORL implementation (there its called alpha),
     #       but the paper pseudocode doesn't do that.
     #       the official implementaiton does that only if `use_automatic_entropy_tuning` is enabled
@@ -150,19 +149,22 @@ def train(config: TrainConfig) -> None:
         # [batch_size, ...]
         state, action, reward, next_state, done = buffer.sample()
         with torch.no_grad():
-            # [?], [?]
+            # [batch_size, action_dim], [batch_size]
             next_action, next_action_log_prob = actor(next_state)
-            # [?]
-            q_next = target_critic(next_state, next_action).min().values - config.beta * next_action_log_prob
+            # [batch_size]
+            q_next = target_critic(next_state, next_action).min(-1).values - config.beta * next_action_log_prob  # TODO: is min(-1) correct?
             # [batch_size]
             q_target = reward + (1 - done) * config.gamma * q_next
 
         # update critcs
         # [1] <- ([num_critics, batch_size] - [1, batch_size])
-        critic_losses = (critic(state, action) - q_target[None,:]).pow(2).mean(dim=1).sum(dim=0)
+        critic_losses = (critic(state, action) - q_target.unsqueeze(-1)).pow(2).mean(dim=1).sum(dim=0)
+        # [num_critics, batch_size, *_dim]
+        state_tmp = state.unsqueeze(0).repeat_interleave(config.num_critics, dim=0)
+        action_tmp = action.unsqueeze(0).repeat_interleave(config.num_critics, dim=0).requires_grad_()
         # [batch_size, num_critics, action_dim]
-        q_gradients = torch.autograd.grad(critic(state, action.requires_grad()), create_graph=True).t()
-        q_gradients = q_gradients / q_gradients.norm(p=2,dim=2)
+        q_gradients = torch.autograd.grad(critic(state_tmp, action_tmp).sum(), action_tmp, create_graph=True)[0].transpose(0,1)  # TODO: is action correct?
+        q_gradients = q_gradients / q_gradients.norm(p=2,dim=-1).unsqueeze(-1)
         # [batch_size, num_critics, num_critics]
         q_cosine_similarity_matrix = (q_gradients @ q_gradients.transpose(1,2)) * (1 - torch.eye(config.num_critics, device=config.device))
         # [1]
@@ -175,7 +177,7 @@ def train(config: TrainConfig) -> None:
         # update actor
         actor_action, actor_action_log_prob = actor(state)
         actor_q_values = critic(state, actor_action)
-        actor_loss = (actor_q_values.min().values - config.beta * actor_action_log_prob).mean()
+        actor_loss = (actor_q_values.min(-1).values - config.beta * actor_action_log_prob).mean()
         actor_optimizer.zero_grad()
         actor_loss.backward()
         actor_optimizer.step()
@@ -216,4 +218,5 @@ def train(config: TrainConfig) -> None:
 
 
 if __name__ == '__main__':
+    torch.autograd.set_detect_anomaly(True)
     train()

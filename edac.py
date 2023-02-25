@@ -17,7 +17,7 @@ import gym
 
 @dataclass
 class TrainConfig:
-    total_updates: int = 10_000  # number of total updates
+    total_updates: int = 100_000  # number of total updates
     batch_size: int = 2048  # batch size (per update)
     eval_every: int = 1000  # evaluate every n updates
     eval_episodes: int = 10  # number of episodes for evaluation
@@ -35,9 +35,11 @@ class TrainConfig:
     group: str = 'edac'  # wandb group name
     project: str = 'edac_reimplementation'  # wandb project name
     seed: int = 0  # seed (0 for random seed)
+    device: str = 'auto'  # device to use (auto, cuda or cpu)
 
     def __post_init__(self):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if self.device == 'auto':
+            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.name = f'{self.name}-{self.env}-{time.strftime("%y%m%d-%H%M%S")}'
 
 

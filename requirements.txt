@@ -1,0 +1,8 @@
+git+https://github.com/tinkoff-ai/d4rl@master#egg=d4rl
+tqdm~=4.64.1
+wandb~=0.13.9
+mujoco-py==2.1.2.14
+numpy~=1.24.1
+gym[mujoco_py,classic_control]==0.23.0
+torch~=1.13.1
+pyrallis~=0.3.1

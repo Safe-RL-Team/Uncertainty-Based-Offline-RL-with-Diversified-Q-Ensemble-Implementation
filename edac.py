@@ -17,9 +17,9 @@ import gym
 
 @dataclass
 class TrainConfig:
-    total_updates: int = 10  # number of total updates
+    total_updates: int = 10_000  # number of total updates
     batch_size: int = 2048  # batch size (per update)
-    eval_every: int = 100  # evaluate every n updates
+    eval_every: int = 1000  # evaluate every n updates
     eval_episodes: int = 10  # number of episodes for evaluation
     lr_actor: float = 0.0003  # learning rate for actor
     lr_critic: float = 0.0003  # learning rate for critic
@@ -145,78 +145,78 @@ def train(config: TrainConfig) -> None:
     #       the official implementaiton does that only if `use_automatic_entropy_tuning` is enabled
 
     # main training loop
-    for update_step in trange(config.total_updates):
-        # [batch_size, ...]
-        state, action, reward, next_state, done = buffer.sample()
+    for epoch in trange(config.total_updates//config.eval_every, desc='Epoch'):
+        for _ in trange(config.eval_every, desc='Training Update', leave=False):
+            # [batch_size, ...]
+            state, action, reward, next_state, done = buffer.sample()
+            with torch.no_grad():
+                # [batch_size, action_dim], [batch_size]
+                next_action, next_action_log_prob = actor(next_state)
+                # [batch_size]
+                q_next = target_critic(next_state, next_action).min(-1).values - config.beta * next_action_log_prob  # TODO: is min(-1) correct?
+                # [batch_size]
+                q_target = reward + (1 - done) * config.gamma * q_next
+
+            # update critcs
+            # [1] <- ([num_critics, batch_size] - [1, batch_size])
+            critic_losses = (critic(state, action) - q_target.unsqueeze(-1)).pow(2).mean(dim=1).sum(dim=0)
+            # [num_critics, batch_size, *_dim]
+            state_tmp = state.unsqueeze(0).repeat_interleave(config.num_critics, dim=0)
+            action_tmp = action.unsqueeze(0).repeat_interleave(config.num_critics, dim=0).requires_grad_()
+            # [batch_size, num_critics, action_dim]
+            q_gradients_tmp = torch.autograd.grad(critic(state_tmp, action_tmp).sum(), action_tmp, create_graph=True)[0].transpose(0,1)  # TODO: is action correct?
+            q_gradients = q_gradients_tmp / (q_gradients_tmp.norm(p=2,dim=-1).unsqueeze(-1) + 1e-10)
+            # [batch_size, num_critics, num_critics]
+            q_cosine_similarity_matrix = (q_gradients @ q_gradients.transpose(1,2)) * (1 - torch.eye(config.num_critics, device=config.device))  # TODO: it seems like nans arise in @
+            # [1]
+            diversity_loss = (q_cosine_similarity_matrix.sum(dim=(1,2))).mean() / (config.num_critics - 1)
+            critic_loss = critic_losses + config.eta * diversity_loss
+            critic_optimizer.zero_grad()
+            critic_loss.backward()
+            critic_optimizer.step()
+
+            # update actor
+            actor_action, actor_action_log_prob = actor(state)
+            actor_q_values = critic(state, actor_action)
+            actor_loss = (actor_q_values.min(-1).values - config.beta * actor_action_log_prob).mean()
+            actor_optimizer.zero_grad()
+            actor_loss.backward()
+            actor_optimizer.step()
+
+            # update target critic
+            with torch.no_grad():
+                for target_param, source_param in zip(target_critic.parameters(), critic.parameters()):
+                    target_param.data.copy_((1 - config.tau) * target_param.data + config.tau * source_param.data)
+
+        # eval
+        actor.eval()
         with torch.no_grad():
-            # [batch_size, action_dim], [batch_size]
-            next_action, next_action_log_prob = actor(next_state)
-            # [batch_size]
-            q_next = target_critic(next_state, next_action).min(-1).values - config.beta * next_action_log_prob  # TODO: is min(-1) correct?
-            # [batch_size]
-            q_target = reward + (1 - done) * config.gamma * q_next
-
-        # update critcs
-        # [1] <- ([num_critics, batch_size] - [1, batch_size])
-        critic_losses = (critic(state, action) - q_target.unsqueeze(-1)).pow(2).mean(dim=1).sum(dim=0)
-        # [num_critics, batch_size, *_dim]
-        state_tmp = state.unsqueeze(0).repeat_interleave(config.num_critics, dim=0)
-        action_tmp = action.unsqueeze(0).repeat_interleave(config.num_critics, dim=0).requires_grad_()
-        # [batch_size, num_critics, action_dim]
-        q_gradients = torch.autograd.grad(critic(state_tmp, action_tmp).sum(), action_tmp, create_graph=True)[0].transpose(0,1)  # TODO: is action correct?
-        q_gradients = q_gradients / q_gradients.norm(p=2,dim=-1).unsqueeze(-1)
-        # [batch_size, num_critics, num_critics]
-        q_cosine_similarity_matrix = (q_gradients @ q_gradients.transpose(1,2)) * (1 - torch.eye(config.num_critics, device=config.device))
-        # [1]
-        diversity_loss = (q_cosine_similarity_matrix.sum(dim=(1,2))).mean() / (config.num_critics - 1)
-        critic_loss = critic_losses + config.eta * diversity_loss
-        critic_optimizer.zero_grad()
-        critic_loss.backward()
-        critic_optimizer.step()
-
-        # update actor
-        actor_action, actor_action_log_prob = actor(state)
-        actor_q_values = critic(state, actor_action)
-        actor_loss = (actor_q_values.min(-1).values - config.beta * actor_action_log_prob).mean()
-        actor_optimizer.zero_grad()
-        actor_loss.backward()
-        actor_optimizer.step()
-
-        # update target critic
-        with torch.no_grad():
-            for target_param, source_param in zip(target_critic.parameters(), critic.parameters()):
-                target_param.data.copy_((1 - config.tau) * target_param.data + config.tau * source_param.data)
-
-        # eval and log
-        if update_step % config.eval_every == 0:
-            # eval
-            actor.eval()
             rewards = np.zeros(config.eval_episodes)
-            for i in range(config.eval_episodes):
+            for i in trange(config.eval_episodes, desc='Eval Episode', leave=False):
                 state = eval_env.reset()
                 done = False
                 while not done:
                     action, _ = actor(torch.tensor(state, dtype=torch.float32, device=config.device))
-                    state, reward, done, _ = eval_env.step(action)
+                    state, reward, done, _ = eval_env.step(action.cpu().numpy())
                     rewards[i] += reward
                     # eval_env.render()
-            actor.train()
+        actor.train()
 
-            # log
-            wandb.log({
-                "step": update_step,
-                "critic_loss": critic_loss.item(),
-                "actor_loss": actor_loss.item(),
-                "eval/mean_reward": np.mean(rewards),
-                "eval/std_reward": np.std(rewards),
-                "actor/entropy": -actor_action_log_prob.mean().item(),
-                "actor/q_value": actor_q_values.mean().item(),
-            })
+        # log
+        wandb.log({
+            "epoch": epoch,
+            "critic_loss": critic_loss.item(),
+            "actor_loss": actor_loss.item(),
+            "eval/mean_reward": np.mean(rewards),
+            "eval/std_reward": np.std(rewards),
+            "actor/entropy": -actor_action_log_prob.mean().item(),
+            "actor/q_value": actor_q_values.mean().item(),
+        })
 
     wandb_run.finish()
 
 
 
 if __name__ == '__main__':
-    torch.autograd.set_detect_anomaly(True)
+    # torch.autograd.set_detect_anomaly(True)  # crashes wsl
     train()

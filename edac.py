@@ -37,11 +37,15 @@ class TrainConfig:
     project: str = 'edac_reimplementation'  # wandb project name
     seed: int = 0  # seed (0 for random seed)
     device: str = 'auto'  # device to use (auto, cuda or cpu)
+    save_path: str = 'ckp'  # save the model weights and config
 
     def __post_init__(self):
         if self.device == 'auto':
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.name = f'{self.name}-{self.env}-{time.strftime("%y%m%d-%H%M%S")}'
+        if self.save_path:
+            self.save_path = os.path.join(self.save_path, self.name)
+            os.makedirs(self.save_path, exist_ok=True)
 
 
 class ReplayBuffer:
@@ -108,12 +112,12 @@ class VectorCritic(nn.Module):
     def __init__(self, layer_sizes: list[int], num_critics: int):
         super().__init__()
         self.models = nn.ModuleList([
-            nn.Sequential(*(
+            nn.Sequential(*[
                 x for i in range(len(layer_sizes) - 1) for x in [
                     nn.Linear(layer_sizes[i], layer_sizes[i + 1]),
                     nn.ReLU()
                 ]
-            )) for _ in range(num_critics)
+        ][:-1]) for _ in range(num_critics)
         ])
         for model in self.models:
             # init as in the EDAC paper
@@ -127,7 +131,7 @@ class VectorCritic(nn.Module):
 
 
 
-def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]], None]) -> None:
+def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]], None] = None) -> None:
     # init env
     eval_env = gym.make(config.env)
     state_dim = eval_env.observation_space.shape[0]
@@ -148,8 +152,13 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
     random.seed(config.seed)
     torch.manual_seed(config.seed)
 
-    # init wandb
+    # init wandb logging
     wandb_run = wandb.init(name=config.name, group=config.group, project=config.project, config=config)
+
+    # save config
+    if config.save_path:
+        with open(f'{config.save_path}/config.yaml', "w") as f:
+            pyrallis.dump(config, f)
 
     # init model
     actor = Actor([state_dim, 256, 256, action_dim], max_action=eval_env.action_space.high[0]).to(config.device)
@@ -225,6 +234,8 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
                     action, _ = actor(torch.tensor(state, dtype=torch.float32, device=config.device))
                     state, reward, done, _ = eval_env.step(action.cpu().numpy())
                     rewards[i] += reward
+            if config.save:
+                torch.save(actor.state_dict(), f'ckp/{config.name}/actor{epoch}.pt')
         actor.train()
 
         # log
@@ -253,4 +264,4 @@ def main(config: TrainConfig) -> None:
 
 if __name__ == '__main__':
     # torch.autograd.set_detect_anomaly(True)  # crashes wsl
-    train()
+    main()

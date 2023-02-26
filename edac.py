@@ -23,10 +23,10 @@ import gym
 
 @dataclass
 class TrainConfig:
-    total_updates: int = 100_000  # number of total updates
+    epochs: int = 200  # number of total updates
+    updates_per_epoch: int = 500  # number of updates per epoch
+    eval_episodes: int = 5  # number of episodes for evaluation
     batch_size: int = 2048  # batch size (per update)
-    eval_every: int = 1000  # evaluate every n updates
-    eval_episodes: int = 10  # number of episodes for evaluation
     lr_actor: float = 0.0003  # learning rate for actor
     lr_critic: float = 0.0003  # learning rate for critic
     env: str = 'halfcheetah-medium-v2'  # environment name
@@ -42,7 +42,10 @@ class TrainConfig:
     project: str = 'edac_reimplementation'  # wandb project name
     seed: int = 0  # seed (0 for random seed)
     device: str = 'auto'  # device to use (auto, cuda or cpu)
-    save_path: str = 'ckp'  # save the model weights and config
+
+    save_path: str = 'ckp'  # where to save the model weights and config
+    save_every: int = 10  # save the model every x epochs
+    continue_from: str = ''  # continue training from a checkpoint file (config has to be loaded separately)
 
     def __post_init__(self):
         if self.device == 'auto':
@@ -147,23 +150,16 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
     if config.seed == 0:
         config.seed = np.random.randint(0, 100000)
     else:
-        # if a seed is given, try to be deterministic (might be slower)
-        torch.use_deterministic_algorithms(True)
+        # TODO: if a seed is given, try to be deterministic (might be slower)
+        #       but does this make sense?
+        # torch.use_deterministic_algorithms(True)
+        pass
     eval_env.seed(config.seed)
     eval_env.action_space.seed(config.seed)
     os.environ["PYTHONHASHSEED"] = str(config.seed)
     np.random.seed(config.seed)
     random.seed(config.seed)
     torch.manual_seed(config.seed)
-
-    # init wandb logging
-    wandb_run = wandb.init(name=config.name_full, group=config.group, project=config.project, config=config)
-
-    # save config
-    if config.save_path:
-        config.save_path_full.mkdir(parents=True, exist_ok=True)
-        with (config.save_path_full / 'config.yaml').open("w") as f:
-            pyrallis.dump(config, f)
 
     # init model
     actor = Actor([state_dim, 256, 256, action_dim], max_action=eval_env.action_space.high[0]).to(config.device)
@@ -175,9 +171,33 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
     #       but the paper pseudocode doesn't do that.
     #       the official implementaiton does that only if `use_automatic_entropy_tuning` is enabled
 
+    # continue from checkpoint
+    start_epoch = 0
+    if config.continue_from:
+        continue_file = Path(config.continue_from)
+        if not continue_file.exists():
+            raise FileNotFoundError(f'File `{continue_file}` does not exist.')
+        checkpoint = torch.load(continue_file)
+        actor.load_state_dict(checkpoint['actor'])
+        critic.load_state_dict(checkpoint['critic'])
+        target_critic.load_state_dict(checkpoint['target_critic'])
+        actor_optimizer.load_state_dict(checkpoint['actor_optimizer'])
+        critic_optimizer.load_state_dict(checkpoint['critic_optimizer'])
+        start_epoch = checkpoint['epoch'] + 1
+        print(f'Continuing from epoch {start_epoch}...')
+
+    # save config
+    if config.save_path:
+        config.save_path_full.mkdir(parents=True, exist_ok=True)
+        with (config.save_path_full / 'config.yaml').open("w") as f:
+            pyrallis.dump(config, f)
+
+    # init wandb logging
+    wandb_run = wandb.init(name=config.name_full, group=config.group, project=config.project, config=config)
+
     # main training loop
-    for epoch in trange(config.total_updates//config.eval_every, desc='Epoch'):
-        for _ in trange(config.eval_every, desc='Training Update', leave=False):
+    for epoch in trange(start_epoch, config.epochs, desc='Epoch'):
+        for _ in trange(config.updates_per_epoch, desc='Training Update', leave=False):
             # [batch_size, ...]
             state, action, reward, next_state, done = buffer.sample()
             with torch.no_grad():
@@ -239,8 +259,15 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
                     action, _ = actor(torch.tensor(state, dtype=torch.float32, device=config.device))
                     state, reward, done, _ = eval_env.step(action.cpu().numpy())
                     rewards[i] += reward
-            if config.save_path:
-                torch.save(actor.state_dict(), config.save_path_full / f'actor{epoch}.pt')
+        if config.save_path and (epoch % config.save_every == 0 or epoch == config.epochs - 1):
+            torch.save(dict(
+                actor = actor.state_dict(),
+                critic = critic.state_dict(),
+                actor_optimizer = actor_optimizer.state_dict(),
+                critic_optimizer = critic_optimizer.state_dict(),
+                target_critic = target_critic.state_dict(),
+                epoch = epoch,
+            ), config.save_path_full / f'edac-{epoch}.pt')
         actor.train()
 
         # log
@@ -258,6 +285,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
             "eval/reward_std": np.std(rewards),
         })
 
+    torch.save(actor.state_dict(), config.save_path_full / f'actor-final.pt')
     wandb_run.finish()
 
 
@@ -269,5 +297,4 @@ def main(config: TrainConfig) -> None:
 
 
 if __name__ == '__main__':
-    # torch.autograd.set_detect_anomaly(True)  # crashes wsl
     main()

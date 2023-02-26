@@ -1,3 +1,7 @@
+# Inspired by:
+# 1. paper for EDAC: https://arxiv.org/abs/2110.01548
+# 2. official implementation: https://github.com/snu-mllab/EDAC
+# 3. CORL implementation: https://github.com/tinkoff-ai/CORL
 import os
 from pathlib import Path
 from copy import deepcopy
@@ -29,9 +33,9 @@ class TrainConfig:
 
     num_critics: int = 5  # number of critics
     beta : float = 0.1  # factor for action log probability for the actor loss
-    eta: float = 0.1  # eta for diversity loss
+    eta: float = 1.0  # diversity loss factor
     gamma: float = 0.99  # discount factor
-    tau: float = 0.005  # tau for target network update
+    tau: float = 0.005  # target network update factor
 
     name: str = 'edac'  # wandb name of the experiment
     group: str = 'edac'  # wandb group name
@@ -143,7 +147,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
     if config.seed == 0:
         config.seed = np.random.randint(0, 100000)
     else:
-        # if a seed is given, try to be deterministic
+        # if a seed is given, try to be deterministic (might be slower)
         torch.use_deterministic_algorithms(True)
     eval_env.seed(config.seed)
     eval_env.action_space.seed(config.seed)
@@ -245,6 +249,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
             "critic/loss": critic_loss.item(),
             "critic/base_loss": critic_losses.item(),
             "critic/diversity_loss": diversity_loss.item(),
+            "critic/weight_std": torch.stack([torch.cat([p.flatten() for p in c.parameters()]) for c in critic.models]).std(dim=0).mean().item(),
             "actor/loss": actor_loss.item(),
             "actor/entropy": -actor_action_log_prob.mean().item(),
             "actor/q_value_mean": actor_q_values.mean().item(),

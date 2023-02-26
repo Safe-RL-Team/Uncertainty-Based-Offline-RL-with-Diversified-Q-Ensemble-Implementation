@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Callable
@@ -42,10 +43,9 @@ class TrainConfig:
     def __post_init__(self):
         if self.device == 'auto':
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.name = f'{self.name}-{self.env}-{time.strftime("%y%m%d-%H%M%S")}'
+        self.name_full = f'{self.name}-{self.env}-{time.strftime("%y%m%d-%H%M%S")}'
         if self.save_path:
-            self.save_path = os.path.join(self.save_path, self.name)
-            os.makedirs(self.save_path, exist_ok=True)
+            self.save_path_full = Path(self.save_path) / self.name_full
 
 
 class ReplayBuffer:
@@ -153,11 +153,12 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
     torch.manual_seed(config.seed)
 
     # init wandb logging
-    wandb_run = wandb.init(name=config.name, group=config.group, project=config.project, config=config)
+    wandb_run = wandb.init(name=config.name_full, group=config.group, project=config.project, config=config)
 
     # save config
     if config.save_path:
-        with open(f'{config.save_path}/config.yaml', "w") as f:
+        config.save_path_full.mkdir(parents=True, exist_ok=True)
+        with (config.save_path_full / 'config.yaml').open("w") as f:
             pyrallis.dump(config, f)
 
     # init model
@@ -179,13 +180,13 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
                 # [batch_size, action_dim], [batch_size]
                 next_action, next_action_log_prob = actor(next_state)
                 # [batch_size]
-                q_next = target_critic(next_state, next_action).min(-1).values - config.beta * next_action_log_prob  # TODO: is min(-1) correct?
+                q_next = target_critic(next_state, next_action).min(-1).values - config.beta * next_action_log_prob
                 # [batch_size]
                 q_target = reward + (1 - done) * config.gamma * q_next
 
             # update critcs
             # [1] <- ([num_critics, batch_size] - [1, batch_size])
-            critic_losses = (critic(state, action) - q_target.unsqueeze(-1)).pow(2).mean(dim=1).sum(dim=0)
+            critic_losses = (critic(state, action) - q_target.unsqueeze(-1)).pow(2).sum(dim=1).mean(dim=0)
             # [num_critics, batch_size, *_dim]
             state_tmp = state.unsqueeze(0).repeat_interleave(config.num_critics, dim=0)
             action_tmp = action.unsqueeze(0).repeat_interleave(config.num_critics, dim=0).requires_grad_()
@@ -234,8 +235,8 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
                     action, _ = actor(torch.tensor(state, dtype=torch.float32, device=config.device))
                     state, reward, done, _ = eval_env.step(action.cpu().numpy())
                     rewards[i] += reward
-            if config.save:
-                torch.save(actor.state_dict(), f'ckp/{config.name}/actor{epoch}.pt')
+            if config.save_path:
+                torch.save(actor.state_dict(), config.save_path_full / f'actor{epoch}.pt')
         actor.train()
 
         # log

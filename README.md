@@ -21,8 +21,13 @@ Then run `edac.py` using python. Add `--help` to show the available options.
 
 ```bash
 conda activate edac_r
-python edac.py --project=MyWandbEdacProject --total_updates=69420
+python edac.py --project=MyWandbEdacProject --epochs=42
 ```
 
 By default, the results are synced to [Weights & Biases](https://wandb.ai/). This can be disabled with `wandb offline` and enabled again with `wandb online`.
 
+## Options
+
+You can see all options by running `python edac.py --help`.
+
+By default, the model is periodically saved to `ckp`. You can load a model by specifying `--load_path=ckp/DIR_NAME/MODEL_NAME.pt`. Note, that the config is saved separetely and can be loaded, if needed, by specifying `--config_path=ckp/DIR_NAME/config.yaml`. Remember to increase `--epochs`, if you want to continue a finished training run.

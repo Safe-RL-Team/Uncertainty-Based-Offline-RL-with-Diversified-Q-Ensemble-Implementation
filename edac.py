@@ -2,6 +2,8 @@
 # 1. paper for EDAC: https://arxiv.org/abs/2110.01548
 # 2. official implementation: https://github.com/snu-mllab/EDAC
 # 3. CORL implementation: https://github.com/tinkoff-ai/CORL
+# author: Jonas Loos, 2023
+
 import os
 from pathlib import Path
 from copy import deepcopy
@@ -56,7 +58,7 @@ class TrainConfig:
 
 
 class ReplayBuffer:
-    '''buffer for the offline RL dataset'''
+    '''buffer for an offline RL dataset'''
     def __init__(self, dataset, batch_size : int, device : str):
         size = dataset["observations"].shape[0]
         if size < batch_size:
@@ -78,7 +80,9 @@ class ReplayBuffer:
         )
 
 
+
 class Actor(nn.Module):
+    '''Actor network'''
     def __init__(self, layer_sizes : list[int], max_action : float = 1.0):
         super().__init__()
         assert len(layer_sizes) >= 3, f'layer_sizes must have at least 3 elements (input, hidden, output), got {layer_sizes}'
@@ -102,7 +106,6 @@ class Actor(nn.Module):
         torch.nn.init.uniform_(self.output_uncertainty.weight, -1e-3, 1e-3)
         torch.nn.init.uniform_(self.output_uncertainty.bias, -1e-3, 1e-3)
 
-
     def forward(self, state : torch.Tensor):
         x_hidden = self.hidden(state)
         x_mean = self.output(x_hidden)
@@ -115,16 +118,19 @@ class Actor(nn.Module):
         return action, action_log_prob
 
 
+
 class VectorCritic(nn.Module):
+    '''Multiple critics in one class'''
     def __init__(self, layer_sizes: list[int], num_critics: int):
         super().__init__()
+        # create multiple critics with the architecture given by layer_sizes. The output layer has no activation function.
         self.models = nn.ModuleList([
             nn.Sequential(*[
                 x for i in range(len(layer_sizes) - 1) for x in [
                     nn.Linear(layer_sizes[i], layer_sizes[i + 1]),
                     nn.ReLU()
                 ]
-        ][:-1]) for _ in range(num_critics)
+            ][:-1]) for _ in range(num_critics)
         ])
         for model in self.models:
             # init as in the EDAC paper
@@ -139,6 +145,13 @@ class VectorCritic(nn.Module):
 
 
 def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]], None] = None) -> None:
+    '''
+    Train an offline RL agent using the EDAC algorithm.
+
+    Args:
+        config: the training configuration
+        display_video_callback: useful when calling this function from a notebook, to display the videos of the agent (the callback will be called with a list of numpy arrays, each representing a frame of the video)
+    '''
     # init env
     eval_env = gym.make(config.env)
     state_dim = eval_env.observation_space.shape[0]

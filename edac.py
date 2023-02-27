@@ -184,7 +184,10 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
         actor_optimizer.load_state_dict(checkpoint['actor_optimizer'])
         critic_optimizer.load_state_dict(checkpoint['critic_optimizer'])
         start_epoch = checkpoint['epoch'] + 1
-        print(f'Continuing from epoch {start_epoch}...')
+        if start_epoch >= config.epochs:
+            print(f'Already finished training: {start_epoch}/{config.epochs} epochs')
+            return
+        print(f'Continuing from epoch {start_epoch}, {config.epochs - start_epoch} epochs left.')
 
     # save config
     if config.save_path:
@@ -209,13 +212,14 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
                 q_target = reward + (1 - done) * config.gamma * q_next
 
             # update critcs
-            # [1] <- ([num_critics, batch_size] - [1, batch_size])
+            # [1] <- ([batch_size, num_critics] - [batch_size, 1])
             critic_losses = (critic(state, action) - q_target.unsqueeze(-1)).pow(2).sum(dim=1).mean(dim=0)
-            # [num_critics, batch_size, *_dim]
-            state_tmp = state.unsqueeze(0).repeat_interleave(config.num_critics, dim=0)
-            action_tmp = action.unsqueeze(0).repeat_interleave(config.num_critics, dim=0).requires_grad_()
+            # [batch_size, num_critics, *_dim]
+            action_tmp = action.unsqueeze(1).repeat_interleave(config.num_critics, dim=1).requires_grad_()
+            # [1]
+            critic_q_values_for_grad = torch.cat([critic.models[i](torch.cat([state, action_tmp[:,i]], dim=-1)) for i in range(config.num_critics)]).sum()
             # [batch_size, num_critics, action_dim]
-            q_gradients_tmp = torch.autograd.grad(critic(state_tmp, action_tmp).sum(), action_tmp, create_graph=True)[0].transpose(0,1)  # TODO: is action correct?
+            q_gradients_tmp = torch.autograd.grad(critic_q_values_for_grad, action_tmp, create_graph=True)[0]
             q_gradients = q_gradients_tmp / (q_gradients_tmp.norm(p=2,dim=-1).unsqueeze(-1) + 1e-10)
             # [batch_size, num_critics, num_critics]
             q_cosine_similarity_matrix = (q_gradients @ q_gradients.transpose(1,2)) * (1 - torch.eye(config.num_critics, device=config.device))
@@ -229,7 +233,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
             # update actor
             actor_action, actor_action_log_prob = actor(state)
             actor_q_values = critic(state, actor_action)
-            actor_loss = (actor_q_values.min(-1).values - config.beta * actor_action_log_prob).mean()
+            actor_loss = -(actor_q_values.min(-1).values - config.beta * actor_action_log_prob).mean()
             actor_optimizer.zero_grad()
             actor_loss.backward()
             actor_optimizer.step()

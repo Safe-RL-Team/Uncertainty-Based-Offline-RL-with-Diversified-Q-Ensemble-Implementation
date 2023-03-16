@@ -30,4 +30,28 @@ By default, the results are synced to [Weights & Biases](https://wandb.ai/). Thi
 
 You can see all options by running `python edac.py --help`.
 
+```
+--epochs int          number of total updates (default: 200)
+--updates_per_epoch int
+                      number of updates per epoch (default: 500)
+--eval_episodes int   number of episodes for evaluation (default: 5)
+--batch_size int      batch size (per update) (default: 2048)
+--lr_actor float      learning rate for actor (default: 0.0003)
+--lr_critic float     learning rate for critic (default: 0.0003)
+--env str             environment name (default: halfcheetah-medium-v2)
+--num_critics int     number of critics (default: 5)
+--beta float          factor for action log probability for the actor loss (default: 0.1)
+--eta float           diversity loss factor (default: 1.0)
+--gamma float         discount factor (default: 0.99)
+--tau float           target network update factor (default: 0.005)
+--name str            wandb name of the experiment (default: edac)
+--group str           wandb group name (default: edac)
+--project str         wandb project name (default: edac_reimplementation)
+--seed int            seed (0 for random seed) (default: 0)
+--device str          device to use (auto, cuda or cpu) (default: auto)
+--save_path str       where to save the model weights and config (default: ckp)
+--save_every int      save the model every x epochs (default: 10)
+--continue_from str   continue training from a checkpoint file (config has to be loaded separately) (default: )
+```
+
 By default, the model is periodically saved to `ckp`. You can load a model by specifying `--load_path=ckp/DIR_NAME/MODEL_NAME.pt`. Note, that the config is saved separetely and can be loaded, if needed, by specifying `--config_path=ckp/DIR_NAME/config.yaml`. Remember to increase `--epochs`, if you want to continue a finished training run.

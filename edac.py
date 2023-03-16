@@ -20,6 +20,7 @@ import time
 import random
 import d4rl
 import gym
+from time import time
 
 
 
@@ -53,6 +54,8 @@ class TrainConfig:
         if self.device == 'auto':
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.name_full = f'{self.name}-{self.env}-{time.strftime("%y%m%d-%H%M%S")}'
+        if self.save_path.lower() != 'none':
+            self.save_path = None
         if self.save_path:
             self.save_path_full = Path(self.save_path) / self.name_full
 
@@ -214,6 +217,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
 
     # main training loop
     for epoch in trange(start_epoch, config.epochs, desc='Epoch'):
+        epoch_start_time = time()
         for _ in trange(config.updates_per_epoch, desc='Training Update', leave=False):
             # [batch_size, ...]
             state, action, reward, next_state, done = buffer.sample()
@@ -258,8 +262,10 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
                     target_param.data.copy_((1 - config.tau) * target_param.data + config.tau * source_param.data)
 
         # eval
+        eval_start_time = time()
         actor.eval()
         with torch.no_grad():
+            # create video of the actor in the environment
             if display_video_callback:
                 video = []
                 state = eval_env.reset()
@@ -269,6 +275,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
                     state, reward, done, _ = eval_env.step(action.cpu().numpy())
                     video.append(eval_env.render(mode='rgb_array'))
                 display_video_callback(video)
+            # evaluate the actor in the environment
             rewards = np.zeros(config.eval_episodes)
             for i in trange(config.eval_episodes, desc='Eval Episode', leave=False):
                 state = eval_env.reset()
@@ -277,6 +284,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
                     action, _ = actor(torch.tensor(state, dtype=torch.float32, device=config.device))
                     state, reward, done, _ = eval_env.step(action.cpu().numpy())
                     rewards[i] += reward
+        # periodically save the models
         if config.save_path and (epoch % config.save_every == 0 or epoch == config.epochs - 1):
             torch.save(dict(
                 actor = actor.state_dict(),
@@ -301,9 +309,12 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
             "actor/q_value_std": actor_q_values.std().item(),
             "eval/reward_mean": np.mean(rewards),
             "eval/reward_std": np.std(rewards),
+            "time/train": eval_start_time - epoch_start_time,
+            "time/eval": time() - eval_start_time,
         })
 
-    torch.save(actor.state_dict(), config.save_path_full / f'actor-final.pt')
+    if config.save_path:
+        torch.save(actor.state_dict(), config.save_path_full / f'actor-final.pt')
     wandb_run.finish()
 
 

@@ -20,7 +20,6 @@ import time
 import random
 import d4rl
 import gym
-from time import time
 
 
 
@@ -217,7 +216,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
 
     # main training loop
     for epoch in trange(start_epoch, config.epochs, desc='Epoch'):
-        epoch_start_time = time()
+        epoch_start_time = time.time()
         for _ in trange(config.updates_per_epoch, desc='Training Update', leave=False):
             # [batch_size, ...]
             state, action, reward, next_state, done = buffer.sample()
@@ -261,7 +260,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
                 for target_param, source_param in zip(target_critic.parameters(), critic.parameters()):
                     target_param.data.copy_((1 - config.tau) * target_param.data + config.tau * source_param.data)
         
-        train_time = time() - epoch_start_time
+        train_time = time.time() - epoch_start_time
 
         # eval
         actor.eval()
@@ -277,7 +276,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
                     video.append(eval_env.render(mode='rgb_array'))
                 display_video_callback(video)
             # evaluate the actor in the environment
-            eval_start_time = time()
+            eval_start_time = time.time()
             rewards = np.zeros(config.eval_episodes)
             for i in trange(config.eval_episodes, desc='Eval Episode', leave=False):
                 state = eval_env.reset()
@@ -286,7 +285,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
                     action, _ = actor(torch.tensor(state, dtype=torch.float32, device=config.device))
                     state, reward, done, _ = eval_env.step(action.cpu().numpy())
                     rewards[i] += reward
-            eval_time = time() - eval_start_time
+            eval_time = time.time() - eval_start_time
         # periodically save the models
         if config.save_path and (epoch % config.save_every == 0 or epoch == config.epochs - 1):
             torch.save(dict(
@@ -312,7 +311,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
             "actor/q_value_std": actor_q_values.std().item(),
             "eval/reward_mean": np.mean(rewards),
             "eval/reward_std": np.std(rewards),
-            "time/epoch": time() - epoch_start_time,
+            "time/epoch": time.time() - epoch_start_time,
             "time/train": train_time,
             "time/eval": eval_time,
         })

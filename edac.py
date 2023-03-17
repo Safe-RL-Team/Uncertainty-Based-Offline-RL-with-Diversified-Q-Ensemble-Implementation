@@ -230,19 +230,23 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
 
             # update critcs
             # [1] <- ([batch_size, num_critics] - [batch_size, 1])
-            critic_losses = (critic(state, action) - q_target.unsqueeze(-1)).pow(2).sum(dim=1).mean(dim=0)
-            # [batch_size, num_critics, *_dim]
-            action_tmp = action.unsqueeze(1).repeat_interleave(config.num_critics, dim=1).requires_grad_()
-            # [1]
-            critic_q_values_for_grad = torch.cat([critic.models[i](torch.cat([state, action_tmp[:,i]], dim=-1)) for i in range(config.num_critics)]).sum()
-            # [batch_size, num_critics, action_dim]
-            q_gradients_tmp = torch.autograd.grad(critic_q_values_for_grad, action_tmp, create_graph=True)[0]
-            q_gradients = q_gradients_tmp / (q_gradients_tmp.norm(p=2,dim=-1).unsqueeze(-1) + 1e-10)
-            # [batch_size, num_critics, num_critics]
-            q_cosine_similarity_matrix = (q_gradients @ q_gradients.transpose(1,2)) * (1 - torch.eye(config.num_critics, device=config.device))
-            # [1]
-            diversity_loss = (q_cosine_similarity_matrix.sum(dim=(1,2))).mean() / (config.num_critics - 1)
-            critic_loss = critic_losses + config.eta * diversity_loss
+            base_critic_loss = (critic(state, action) - q_target.unsqueeze(-1)).pow(2).sum(dim=1).mean(dim=0)
+            # calculate diversity loss, if enabled. Otherwise this is equivalent to SAC-N
+            if config.eta != 0:
+                # [batch_size, num_critics, *_dim]
+                action_tmp = action.unsqueeze(1).repeat_interleave(config.num_critics, dim=1).requires_grad_()
+                # [1]
+                critic_q_values_for_grad = torch.cat([critic.models[i](torch.cat([state, action_tmp[:,i]], dim=-1)) for i in range(config.num_critics)]).sum()
+                # [batch_size, num_critics, action_dim]
+                q_gradients_tmp = torch.autograd.grad(critic_q_values_for_grad, action_tmp, create_graph=True)[0]
+                q_gradients = q_gradients_tmp / (q_gradients_tmp.norm(p=2,dim=-1).unsqueeze(-1) + 1e-10)
+                # [batch_size, num_critics, num_critics]
+                q_cosine_similarity_matrix = (q_gradients @ q_gradients.transpose(1,2)) * (1 - torch.eye(config.num_critics, device=config.device))
+                # [1]
+                diversity_loss = (q_cosine_similarity_matrix.sum(dim=(1,2))).mean() / (config.num_critics - 1)
+                critic_loss = base_critic_loss + config.eta * diversity_loss
+            else:
+                critic_loss = base_critic_loss
             critic_optimizer.zero_grad()
             critic_loss.backward()
             critic_optimizer.step()
@@ -302,8 +306,8 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
         wandb.log({
             "epoch": epoch,
             "critic/loss": critic_loss.item(),
-            "critic/base_loss": critic_losses.item(),
-            "critic/diversity_loss": diversity_loss.item(),
+            "critic/base_loss": base_critic_loss.item(),
+            "critic/diversity_loss": config.eta and diversity_loss.item(),
             "critic/weight_std": torch.stack([torch.cat([p.flatten() for p in c.parameters()]) for c in critic.models]).std(dim=0).mean().item(),
             "actor/loss": actor_loss.item(),
             "actor/entropy": -actor_action_log_prob.mean().item(),

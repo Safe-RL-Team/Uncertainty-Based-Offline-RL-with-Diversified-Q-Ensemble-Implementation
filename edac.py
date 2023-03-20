@@ -35,6 +35,7 @@ class TrainConfig:
     env: str = 'halfcheetah-medium-v2'  # environment name
 
     num_critics: int = 5  # number of critics
+    critic_reduction: str = 'min'  # reduction method for critics (min, mean, mean-[float])
     beta : float = 0.1  # factor for action log probability for the actor loss
     eta: float = 1.0  # diversity loss factor
     gamma: float = 0.99  # discount factor
@@ -191,6 +192,17 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
         beta_optimizer = torch.optim.Adam([log_beta], lr=config.lr_actor)
         beta = log_beta.exp().detach()
 
+    # set critic reduction function
+    if config.critic_reduction == 'min':
+        critic_reduction = lambda x: x.min(dim=-1).values
+    elif config.critic_reduction == 'mean':
+        critic_reduction = lambda x: x.mean(dim=-1)
+    elif config.critic_reduction[:len('mean-')] == 'mean-':
+        factor = float(config.critic_reduction[len('mean-'):])
+        critic_reduction = lambda x: x.mean() - factor * x.std()
+    else:
+        raise ValueError(f'Unknown critic reduction function `{config.critic_reduction}`.')
+
     # continue from checkpoint
     start_epoch = 0
     if config.continue_from:
@@ -234,7 +246,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
                 # [batch_size, action_dim], [batch_size]
                 next_action, next_action_log_prob = actor(next_state)
                 # [batch_size]
-                q_next = target_critic(next_state, next_action).min(-1).values - beta * next_action_log_prob
+                q_next = critic_reduction(target_critic(next_state, next_action)) - beta * next_action_log_prob
                 # [batch_size]
                 q_target = reward + (1 - done) * config.gamma * q_next
 
@@ -272,7 +284,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
 
             # update actor
             actor_q_values = critic(state, actor_action)
-            actor_loss = -(actor_q_values.min(-1).values - beta * actor_action_log_prob).mean()
+            actor_loss = -(critic_reduction(actor_q_values) - beta * actor_action_log_prob).mean()
             actor_optimizer.zero_grad()
             actor_loss.backward()
             actor_optimizer.step()

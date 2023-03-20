@@ -38,8 +38,11 @@ You can see all options by running `python edac.py --help`.
 --batch_size int      batch size (per update) (default: 2048)
 --lr_actor float      learning rate for actor (default: 0.0003)
 --lr_critic float     learning rate for critic (default: 0.0003)
+--lr_beta float       learning rate for beta (default: 0.0003)
 --env str             environment name (default: halfcheetah-medium-v2)
 --num_critics int     number of critics (default: 5)
+--critic_reduction str
+                    reduction method for critics (min, mean, mean-[float]) (default: min)
 --beta float          factor for action log probability for the actor loss (default: 0.1)
 --eta float           diversity loss factor (default: 1.0)
 --gamma float         discount factor (default: 0.99)
@@ -49,7 +52,7 @@ You can see all options by running `python edac.py --help`.
 --project str         wandb project name (default: edac_reimplementation)
 --seed int            seed (0 for random seed) (default: 0)
 --device str          device to use (auto, cuda or cpu) (default: auto)
---save_path str       where to save the model weights and config (default: ckp)
+--save_path str       where to save the model weights and config, None for no saving (default: ckp)
 --save_every int      save the model every x epochs (default: 10)
 --continue_from str   continue training from a checkpoint file (config has to be loaded separately) (default: )
 ```

@@ -199,7 +199,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
         critic_reduction = lambda x: x.mean(dim=-1)
     elif config.critic_reduction[:len('mean-')] == 'mean-':
         factor = float(config.critic_reduction[len('mean-'):])
-        critic_reduction = lambda x: x.mean() - factor * x.std()
+        critic_reduction = lambda x: x.mean(dim=-1) - factor * x.std(dim=-1)
     else:
         raise ValueError(f'Unknown critic reduction function `{config.critic_reduction}`.')
 

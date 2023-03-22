@@ -42,7 +42,7 @@ You can see all options by running `python edac.py --help`.
 --env str             environment name (default: halfcheetah-medium-v2)
 --num_critics int     number of critics (default: 5)
 --critic_reduction str
-                    reduction method for critics (min, mean, mean-[float]) (default: min)
+                      reduction method for critics (min, mean, mean-[float], median, exponential-[float]) (default: min)
 --beta float          factor for action log probability for the actor loss (default: 0.1)
 --eta float           diversity loss factor (default: 1.0)
 --gamma float         discount factor (default: 0.99)

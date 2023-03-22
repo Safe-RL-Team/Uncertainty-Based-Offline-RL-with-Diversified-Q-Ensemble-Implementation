@@ -35,7 +35,7 @@ class TrainConfig:
     env: str = 'halfcheetah-medium-v2'  # environment name
 
     num_critics: int = 5  # number of critics
-    critic_reduction: str = 'min'  # reduction method for critics (min, mean, mean-[float])
+    critic_reduction: str = 'min'  # reduction method for critics (min, mean, mean-[float], median, exponential-[float])
     beta : float = 0.1  # factor for action log probability for the actor loss
     eta: float = 1.0  # diversity loss factor
     gamma: float = 0.99  # discount factor
@@ -197,9 +197,16 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
         critic_reduction = lambda x: x.min(dim=-1).values
     elif config.critic_reduction == 'mean':
         critic_reduction = lambda x: x.mean(dim=-1)
-    elif config.critic_reduction[:len('mean-')] == 'mean-':
+    elif config.critic_reduction:
+        # mean minus a factor times the standard deviation
         factor = float(config.critic_reduction[len('mean-'):])
         critic_reduction = lambda x: x.mean(dim=-1) - factor * x.std(dim=-1)
+    elif config.critic_reduction == 'median':
+        critic_reduction = lambda x: x.median(dim=-1).values
+    elif config.critic_reduction[:len('exponential-')] == 'exponential-':
+        # higher values get exponentially less importance
+        base = float(config.critic_reduction[len('exponential-'):])
+        critic_reduction = lambda x: x.sort().values * torch.logspace(0, config.num_critics-1, config.num_critics, base, device=config.device)
     else:
         raise ValueError(f'Unknown critic reduction function `{config.critic_reduction}`.')
 

@@ -206,7 +206,8 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
     elif config.critic_reduction[:len('exponential-')] == 'exponential-':
         # higher values get exponentially less importance
         base = float(config.critic_reduction[len('exponential-'):])
-        critic_reduction = lambda x: x.sort().values * torch.logspace(0, config.num_critics-1, config.num_critics, base, device=config.device)
+        scaling = torch.logspace(0, config.num_critics-1, config.num_critics, base, device=config.device).unsqueeze(0)
+        critic_reduction = lambda x: (x.sort(dim=-1).values * scaling).sum(dim=-1) / scaling.sum()
     else:
         raise ValueError(f'Unknown critic reduction function `{config.critic_reduction}`.')
 
@@ -300,7 +301,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
             with torch.no_grad():
                 for target_param, source_param in zip(target_critic.parameters(), critic.parameters()):
                     target_param.data.copy_((1 - config.tau) * target_param.data + config.tau * source_param.data)
-        
+
         train_time = time.time() - epoch_start_time
 
         # eval

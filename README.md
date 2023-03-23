@@ -1,8 +1,8 @@
 # Ensemble Diversified Actor Critic (EDAC)
 
-This is a reimplementation of the EDAC algorithm in PyTorch. The original paper is [Uncertainty-Based-Offline-RL-with-Diversified-Q-Ensemble](https://arxiv.org/abs/2110.01548), and the official implementation can be found [here](https://github.com/snu-mllab/EDAC).
+This is an implementation of the EDAC algorithm in PyTorch. The original paper is [Uncertainty-Based-Offline-RL-with-Diversified-Q-Ensemble](https://arxiv.org/abs/2110.01548), and the official implementation can be found [here](https://github.com/snu-mllab/EDAC).
 
-This implementation is heavily inspired by [CORL](https://github.com/tinkoff-ai/CORL/blob/main/algorithms/edac.py).
+This implementation is heavily inspired by the EDAC implementation of [CORL](https://github.com/tinkoff-ai/CORL/blob/main/algorithms/edac.py).
 
 
 ## Getting started

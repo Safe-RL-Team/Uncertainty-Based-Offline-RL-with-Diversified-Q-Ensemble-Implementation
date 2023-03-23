@@ -273,7 +273,7 @@ def train(config: TrainConfig, display_video_callback: Callable[[list[np.array]]
                 # [batch_size, num_critics, num_critics]
                 q_cosine_similarity_matrix = (q_gradients @ q_gradients.transpose(1,2)) * (1 - torch.eye(config.num_critics, device=config.device))
                 # [1]
-                diversity_loss = (q_cosine_similarity_matrix.sum(dim=(1,2))).mean() / (config.num_critics - 1)
+                diversity_loss = q_cosine_similarity_matrix.sum(dim=(1,2)).mean() / (config.num_critics - 1)
                 critic_loss = base_critic_loss + config.eta * diversity_loss
             else:
                 critic_loss = base_critic_loss
